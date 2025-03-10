@@ -258,7 +258,7 @@ int main(int argc, char* argv[])
 	}
 
 	// Parameters
-	int K=atoi(argv[2]); 
+	int K=atoi(argv[2]); // Number of clusters
 	int maxIterations=atoi(argv[3]);
 	int minChanges= (int)(lines*atof(argv[4])/100.0);
 	float maxThreshold=atof(argv[5]);
