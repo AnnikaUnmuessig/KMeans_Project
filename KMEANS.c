@@ -383,6 +383,9 @@ int main(int argc, char* argv[])
 		
 		sprintf(line,"\n[%d] Cluster changes: %d\tMax. centroid distance: %f", it, changes, maxDist);
 		outputMsg = strcat(outputMsg,line);
+	
+	printf("Changes: %d, MaxDist: %f, Iteration: %d\n", changes, maxDist, it);
+
 
 	} while((changes>minChanges) && (it<maxIterations) && (maxDist>maxThreshold));
 
