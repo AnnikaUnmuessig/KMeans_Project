@@ -348,7 +348,7 @@ int remainder;
  //Data allocation of local data
  float *local_data = (float*)malloc(local_lines * samples * sizeof(float));
  int *local_classMap = (int*)malloc(local_lines * sizeof(int));
- float *local_aux_centroids = (float*)malloc(K * samples * sizeof(float));  // Local centroids for each process
+ float *local_aux_centroids = (float*)malloc(K * samples * sizeof(float));  //Stores the sum of each all data points assigned to each cluster within each process
  int *localPointsPerClass = (int*)malloc(K * sizeof(int));  // Local points per class for each process
 
 
@@ -361,7 +361,7 @@ int remainder;
 	//1. Calculate the distance from each point to the centroid
 	//Assign each point to the nearest centroid.
     // OpenMP parallelization within each process
-    #pragma omp parallel for reduction(+:changes)
+    #pragma omp parallel for reduction(+:changes) //preventing race conditions when threads could accesss simultaneously the var changes
     for (i = 0; i < local_lines; i++) {
         int global_index = rank * local_lines + i;  // Get global index of the point
         class = 1;
@@ -388,9 +388,11 @@ int remainder;
 		// Parallelize the centroid recalculation using OpenMP
 		#pragma omp parallel for
 		for (i = 0; i < local_lines; i++) {
+			#pragma omp atomic //ensures that only one thread at a time modifies a variable
 			class = local_classMap[i];
 			localPointsPerClass[class - 1] += 1;
 			for (j = 0; j < samples; j++) {
+				#pragma omp atomic
 				local_aux_centroids[(class - 1) * samples + j] += local_data[i * samples + j];
 			}
 		}
