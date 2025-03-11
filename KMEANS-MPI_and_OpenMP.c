@@ -301,7 +301,7 @@ int main(int argc, char* argv[])
 	start = clock();
 	//**************************************************
 	char *outputMsg = (char *)calloc(10000,sizeof(char));
-	char line[100];
+	char line[100];         
 
 	int j;
 	int class;
@@ -345,7 +345,7 @@ if(provided != MPI_THREAD_FUNNELED){
 int lines_per_process = lines / size; 
 remainder = lines % size;
 
-int *send_counts = (int*)malloc(size * sizeof(int));  // Number of elements each process will receive
+int *send_counts = (int*)malloc(lines_per_process * sizeof(int));  // Number of elements each process will receive
 int *displacements = (int*)malloc(size * sizeof(int));  // Starting index for each process
 
 int offset = 0;
@@ -361,6 +361,7 @@ float *local_data = (float*)malloc(local_lines * samples * sizeof(float)); // Ea
 int *local_classMap = (int*)malloc(local_lines * sizeof(int)); // Class assignments for each data point
 float *local_aux_centroids = (float*)malloc(K * samples * sizeof(float)); // Sum of data points for each cluster
 int *localPointsPerClass = (int*)malloc(K * sizeof(int)); // Local points per class for each process
+int local_changes;
 
 // Initialize arrays to zero
 zeroIntArray(local_classMap, local_lines); // Initialize local class map to zero
@@ -376,8 +377,11 @@ if (!local_data || !local_classMap || !local_aux_centroids || !localPointsPerCla
 if (rank == 0) {
     printf("Data distribution: \n");
     for (int i = 0; i < size; i++) {
-        printf("Process %d will receive %d elements\n", i, send_counts[i]);
-    }
+        int start_idx = displacements[i];  
+        int end_idx = start_idx + send_counts[i] - 1;
+        printf("Process %d will receive %d elements (Start: %d, End: %d)\n", 
+               i, send_counts[i], start_idx, end_idx);
+		}
 }
 
 // Scatter data among MPI processes using MPI_Scatterv
@@ -387,7 +391,7 @@ MPI_Scatterv(data, send_counts, displacements, MPI_FLOAT, local_data, local_line
 
 //Start of the KMeans Loop (every process executes this with subdata)
 	do{
-		changes = 0;
+		local_changes = 0;
 		it++;
 	
 	//1. Calculate the distance from each point to the centroid
@@ -410,11 +414,11 @@ MPI_Scatterv(data, send_counts, displacements, MPI_FLOAT, local_data, local_line
         }
 
         if (local_classMap[i] != class) {
-            changes++;
+            local_changes++;
         } //if class assignment has changed, increment changes
         local_classMap[i] = class; //updates local_classMap with cluster assignment
     }
-	printf("Process %d, Changes: %d\n", rank, changes);
+	printf("Process %d, Local Changes: %d\n", rank, local_changes);
 
 	zeroIntArray(localPointsPerClass, K);  // Zero out local points per class
     zeroFloatMatriz(local_aux_centroids, K, samples);  // Zero out local centroids
@@ -428,32 +432,33 @@ MPI_Scatterv(data, send_counts, displacements, MPI_FLOAT, local_data, local_line
 			class = local_classMap[i];
 			localPointsPerClass[class - 1] += 1;
 			for (j = 0; j < samples; j++) {
-				#pragma omp atomic
+				//#pragma omp atomic
 				local_aux_centroids[(class - 1) * samples + j] += local_data[i * samples + j]; //adds each data point value to local_aux_centroids
 			}
 		}
-	
-		// Reduce the centroids within each process and send results to root process
-       MPI_Reduce(local_aux_centroids, auxCentroids, K * samples, MPI_FLOAT, MPI_SUM, 0, MPI_COMM_WORLD);
-       MPI_Reduce(localPointsPerClass, pointsPerClass, K, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
 
+	   MPI_Allreduce(&local_changes, &changes, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+	   printf("Changes: %d\n", changes);
+	
+		// Reduce the centroids within each process
+		MPI_Allreduce(local_aux_centroids, auxCentroids, K * samples, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+		MPI_Allreduce(localPointsPerClass, pointsPerClass, K, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+		MPI_Gatherv(local_classMap, local_lines, MPI_INT, 
+            classMap, send_counts, displacements, MPI_INT, 
+            0, MPI_COMM_WORLD);
 
 	
-		if (rank == 0) {
-			// Compute the new centroids by averaging the sums from all processes using OpenMP
-			//#pragma omp parallel for private(i, j)
-			printf("New Centroids:\n");
-			for (i = 0; i < K; i++) {
-				printf("Centroid %d: ", i);
-				for (j = 0; j < samples; j++) {
-					if (pointsPerClass[i] != 0) {  // Avoid division by zero
-						//Divides summed values by the number of points to compute the new centroid positions
-						printf("%f ", auxCentroids[i * samples + j]);
-						auxCentroids[i * samples + j] /= pointsPerClass[i];
-					}
-					printf("\n");
+		for (i = 0; i < K; i++) {
+			printf("Centroid %d: ", i);
+			for (j = 0; j < samples; j++) {
+				if (pointsPerClass[i] != 0) {  // Avoid division by zero
+					auxCentroids[i * samples + j] /= pointsPerClass[i]; // Compute new centroid
 				}
+				printf("%f ", auxCentroids[i * samples + j]);
 			}
+			printf("\n");  // Print new line after printing all values for a centroid
+		}
+		
 			
 			maxDist = FLT_MIN;
 			//#pragma omp parallel for reduction(max:maxDist)
@@ -467,10 +472,7 @@ MPI_Scatterv(data, send_counts, displacements, MPI_FLOAT, local_data, local_line
 			
 			// Update centroids with new values
 			memcpy(centroids, auxCentroids, K * samples * sizeof(float));
-		}
 		
-		// Broadcast updated centroids to all processes
-		MPI_Bcast(centroids, K * samples, MPI_FLOAT, 0, MPI_COMM_WORLD);
 
 		
 		if (rank == 0) {
@@ -484,13 +486,15 @@ MPI_Scatterv(data, send_counts, displacements, MPI_FLOAT, local_data, local_line
 
 	} while((changes>minChanges) && (it<maxIterations) && (maxDist>maxThreshold));
 
+	if (rank=0) {
 	free(local_data);
     free(local_classMap);
     free(local_aux_centroids);
     free(localPointsPerClass);
     free(auxCentroids);
     free(pointsPerClass);
- 
+	}
+
 	MPI_Finalize();
 
 /*
