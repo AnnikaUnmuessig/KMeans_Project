@@ -341,10 +341,6 @@ if(provided != MPI_THREAD_FUNNELED){
     printf("WARNING: MPI_THREAD_FUNNELED not provided!\n");
 }
 
-//Set number of OpenMP threads (Hypermeter)
-int num_threads= 4;
-omp_set_num_threads(num_threads);
-
 // Divide lines by MPI processes
 int lines_per_process = lines / size; 
 remainder = lines % size;
@@ -367,12 +363,10 @@ float *local_aux_centroids = (float*)malloc(K * samples * sizeof(float)); // Sum
 int *localPointsPerClass = (int*)malloc(K * sizeof(int)); // Local points per class for each process
 int local_changes;
 
-
-// Initialize arrays to zero 
+// Initialize arrays to zero
 zeroIntArray(local_classMap, local_lines); // Initialize local class map to zero
 zeroFloatMatriz(local_aux_centroids, K, samples); // Initialize auxiliary centroids to zero
 zeroIntArray(localPointsPerClass, K); // Initialize points per class to zero
-
 
 if (!local_data || !local_classMap || !local_aux_centroids || !localPointsPerClass) {
     fprintf(stderr, "Memory allocation failed\n");
@@ -393,13 +387,8 @@ if (rank == 0) {
 // Scatter data among MPI processes using MPI_Scatterv
 MPI_Scatterv(data, send_counts, displacements, MPI_FLOAT, local_data, local_lines * samples, MPI_FLOAT, 0, MPI_COMM_WORLD);
 //samples = columns
-end = clock();
-if (rank==0) {
-printf("\nMemory allocation Parallel part and MPI initialization: %f seconds\n", (double)(end - start) / CLOCKS_PER_SEC);
-}
-fflush(stdout);
 
-start= clock();
+
 //Start of the KMeans Loop (every process executes this with subdata)
 	do{
 		local_changes = 0;
@@ -409,12 +398,8 @@ start= clock();
 	//Assign each point to the nearest centroid.
     // OpenMP parallelization within each process
     //#pragma omp parallel for reduction(+:changes) //preventing race conditions when threads could accesss simultaneously the var changes
-    //int global_index;
-	//iterates over all local lines
-	int global_index;
 
-	//Idea: use local_data instead of data
-	#pragma omp parallel for private(class,global_index, i, j,minDist, dist) reduction(+:local_changes) //works but just when i, j declared as private
+	//iterates over all local lines
     for (i = 0; i < local_lines; i++) {
         int global_index = displacements[rank] + i;  //get original index of point in dataset
         class = 1; //stores cluster assignment
@@ -432,7 +417,6 @@ start= clock();
             local_changes++;
         } //if class assignment has changed, increment changes
         local_classMap[i] = class; //updates local_classMap with cluster assignment
-
     }
 	printf("Process %d, Local Changes: %d\n", rank, local_changes);
 
@@ -444,11 +428,11 @@ start= clock();
 		//#pragma omp parallel for
 
 		//iterates over each local line, gets cluster assignment, increments count of points in that class
-		#pragma omp for //works
 		for (i = 0; i < local_lines; i++) {
 			class = local_classMap[i];
-			localPointsPerClass[class - 1] ++;
+			localPointsPerClass[class - 1] += 1;
 			for (j = 0; j < samples; j++) {
+				//#pragma omp atomic
 				local_aux_centroids[(class - 1) * samples + j] += local_data[i * samples + j]; //adds each data point value to local_aux_centroids
 			}
 		}
@@ -463,7 +447,7 @@ start= clock();
             classMap, send_counts, displacements, MPI_INT, 
             0, MPI_COMM_WORLD);
 
-	    #pragma omp for //works I guess
+	
 		for (i = 0; i < K; i++) {
 			printf("Centroid %d: ", i);
 			for (j = 0; j < samples; j++) {
@@ -477,8 +461,8 @@ start= clock();
 		
 			
 			maxDist = FLT_MIN;
+			//#pragma omp parallel for reduction(max:maxDist)
 			//computes how much centroids moved
-			#pragma omp parallel for //works
 			for (i = 0; i < K; i++) {
 				distCentroids[i] = euclideanDistance(&centroids[i * samples], &auxCentroids[i * samples], samples);
 				if (distCentroids[i] > maxDist) {
@@ -490,8 +474,8 @@ start= clock();
 			memcpy(centroids, auxCentroids, K * samples * sizeof(float));
 		
 
-		
-		if (rank == 0) {
+
+		if (rank==0) {
 			sprintf(line, "\n[%d] Cluster changes: %d\tMax. centroid distance: %f", it, changes, maxDist);
 			outputMsg = strcat(outputMsg, line);
 		} 
@@ -507,10 +491,11 @@ start= clock();
     free(local_classMap);
     free(local_aux_centroids);
     free(localPointsPerClass);
+   
+
+	//MPI_Finalize();
 
 	
-
-	MPI_Finalize();
 
 /*
  *
@@ -522,7 +507,7 @@ start= clock();
 
 	//END CLOCK*****************************************
 	end = clock();
-	printf("\nComputation: %f seconds", (double)(end - start) / CLOCKS_PER_SEC);
+	printf("\nComputation: %f seconds\n", (double)(end - start) / CLOCKS_PER_SEC);
 	fflush(stdout);
 	//**************************************************
 	//START CLOCK***************************************
@@ -530,26 +515,40 @@ start= clock();
 	//**************************************************
 
 	
-    if (rank == 0) {
-	if (changes <= minChanges) {
-		printf("\n\nTermination condition:\nMinimum number of changes reached: %d [%d]", changes, minChanges);
-	}
-	else if (it >= maxIterations) {
-		printf("\n\nTermination condition:\nMaximum number of iterations reached: %d [%d]", it, maxIterations);
-	}
-	else {
-		printf("\n\nTermination condition:\nCentroid update precision reached: %g [%g]", maxDist, maxThreshold);
-	}	
 
-	// Writing the classification of each point to the output file.
-	error = writeResult(classMap, lines, argv[6]);
-	if(error != 0)
-	{
-		showFileError(error, argv[6]);
-		exit(error);
+	if (rank==0) {
+		if (changes <= minChanges) {
+			printf("\n\nTermination condition:\nMinimum number of changes reached: %d [%d]", changes, minChanges);
+		}
+		else if (it >= maxIterations) {
+			printf("\n\nTermination condition:\nMaximum number of iterations reached: %d [%d]", it, maxIterations);
+		}
+		else {
+			printf("\n\nTermination condition:\nCentroid update precision reached: %g [%g]", maxDist, maxThreshold);
+		}	
+	
+		// Writing the classification of each point to the output file.
+		error = writeResult(classMap, lines, argv[6]);
+		printf("\nFirst 10 cluster assignments:\n");
+	
+		for (int i = 0; i < 10 ; i++) {
+			printf("%d\n", classMap[i]);
+		}
+	
+		if(error != 0)
+		{
+			showFileError(error, argv[6]);
+			exit(error);
+		}
+	
+		// END CLOCK*****************************************
+		end = clock();
+		printf("\n\nMemory deallocation: %f seconds\n", (double)(end - start) / CLOCKS_PER_SEC);
+		fflush(stdout);
 	}
-}
-	//Free memory
+	MPI_Finalize();
+
+	// Free memory (this part should be outside rank == 0 so all processes deallocate memory)
 	free(data);
 	free(classMap);
 	free(centroidPos);
@@ -558,10 +557,7 @@ start= clock();
 	free(pointsPerClass);
 	free(auxCentroids);
 
-	//END CLOCK*****************************************
-	end = clock();
-	printf("\n\nMemory deallocation: %f seconds\n", (double)(end - start) / CLOCKS_PER_SEC);
-	fflush(stdout);
-	//***************************************************/
+	
+	
 	return 0;
 }
