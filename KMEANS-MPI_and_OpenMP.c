@@ -385,8 +385,7 @@ if (rank == 0) {
     for (int i = 0; i < size; i++) {
         int start_idx = displacements[i];  
         int end_idx = start_idx + send_counts[i] - 1;
-        printf("Process %d will receive %d elements (Start: %d, End: %d)\n", 
-               i, send_counts[i], start_idx, end_idx);
+        //printf("Process %d will receive %d elements (Start: %d, End: %d)\n", i, send_counts[i], start_idx, end_idx);
 		}
 }
 
@@ -421,7 +420,11 @@ start= clock();
         minDist = FLT_MAX; //stores smallest distance
         for (j = 0; j < K; j++) { //K: number of clusters
             dist = euclideanDistance(&data[global_index * samples], &centroids[j * samples], samples); //computes eucl dist between point centroid
-
+			printf("Process %d: Point %d (global index %d) -> [", rank, i, global_index);
+			for (int s = 0; s < samples; s++) {
+				printf("%f ", centroids[j * samples + s]);
+			}
+			printf("] | Distance to centroid %d: %f\n", j, dist);
             if (dist < minDist) {
                 minDist = dist;
                 class = j + 1;
@@ -434,7 +437,7 @@ start= clock();
         local_classMap[i] = class; //updates local_classMap with cluster assignment
 
     }
-	printf("Process %d, Local Changes: %d\n", rank, local_changes);
+	//printf("Process %d, Local Changes: %d\n", rank, local_changes);
 
 	zeroIntArray(localPointsPerClass, K);  // Zero out local points per class
     zeroFloatMatriz(local_aux_centroids, K, samples);  // Zero out local centroids
@@ -454,31 +457,32 @@ start= clock();
 		}
 
 	   MPI_Allreduce(&local_changes, &changes, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
-	   printf("Changes: %d\n", changes);
+	   //printf("Changes: %d\n", changes);
 	
 		// Reduce the centroids within each process
+		#pragma omp critical 
 		MPI_Allreduce(local_aux_centroids, auxCentroids, K * samples, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
 		MPI_Allreduce(localPointsPerClass, pointsPerClass, K, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
 		MPI_Gatherv(local_classMap, local_lines, MPI_INT, 
             classMap, send_counts, displacements, MPI_INT, 
             0, MPI_COMM_WORLD);
-
+		
 	    #pragma omp for //works I guess
 		for (i = 0; i < K; i++) {
-			printf("Centroid %d: ", i);
+			//printf("Centroid %d: ", i);
 			for (j = 0; j < samples; j++) {
 				if (pointsPerClass[i] != 0) {  // Avoid division by zero
 					auxCentroids[i * samples + j] /= pointsPerClass[i]; // Compute new centroid
 				}
-				printf("%f ", auxCentroids[i * samples + j]);
+				//printf("%f ", auxCentroids[i * samples + j]);
 			}
-			printf("\n");  // Print new line after printing all values for a centroid
+			//printf("\n");  // Print new line after printing all values for a centroid
 		}
 		
 			
 			maxDist = FLT_MIN;
 			//computes how much centroids moved
-			#pragma omp parallel for //works
+		
 			for (i = 0; i < K; i++) {
 				distCentroids[i] = euclideanDistance(&centroids[i * samples], &auxCentroids[i * samples], samples);
 				if (distCentroids[i] > maxDist) {
@@ -497,7 +501,7 @@ start= clock();
 		} 
 	
 	
-	printf("Changes: %d, MaxDist: %f, Iteration: %d\n", changes, maxDist, it);
+	//printf("Changes: %d, MaxDist: %f, Iteration: %d\n", changes, maxDist, it);
 
 
 	} while((changes>minChanges) && (it<maxIterations) && (maxDist>maxThreshold));

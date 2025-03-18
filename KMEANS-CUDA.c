@@ -35,7 +35,7 @@
  * Macros to show errors when calling a CUDA library function,
  * or after launching a kernel
  */
-#define CHECK_CUDA_CALL( a )	{ \
+#define CUDA_CHECK( a )	{ \
 	cudaError_t ok = a; \
 	if ( ok != cudaSuccess ) \
 		fprintf(stderr, "-- Error CUDA call in line %d: %s\n", __LINE__, cudaGetErrorString( ok ) ); \
@@ -197,7 +197,7 @@ float euclideanDistance(float *point, float *center, int samples)
 
 // Kernel for calculating the distance from each point to the centroids
 __global__ void calculateDistancesKernel(float* d_data, float* d_centroids, int* d_classMap, int lines, int samples, int K) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int i = blockIdx.x * blockDim.x + threadIdx.x; //computes global thread index
     if (i < lines) {
         float minDist = FLT_MAX;
         int class = -1;
@@ -236,7 +236,7 @@ __global__ void updateCentroidsKernel(float* d_data, int* d_classMap, float* d_a
 // Kernel for finalizing centroids (averaging the sums)
 __global__ void finalizeCentroidsKernel(float* d_auxCentroids, int* d_pointsPerClass, float* d_centroids, int K, int samples) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < K) {
+    if (i < K) { 
         int count = d_pointsPerClass[i];
         for (int j = 0; j < samples; j++) {
             if (count > 0) {
@@ -384,6 +384,7 @@ CUDA_CHECK(cudaMalloc(&d_auxCentroids, K * samples * sizeof(float)));
 // Memory transfer between host and device memory
 CUDA_CHECK(cudaMemcpy(d_data, data, lines * samples * sizeof(float), cudaMemcpyHostToDevice));
 CUDA_CHECK(cudaMemcpy(d_centroids, centroids, K * samples * sizeof(float), cudaMemcpyHostToDevice));
+CUDA_CHECK(cudaMemcpy(d_classMap, classMap, lines * sizeof(int), cudaMemcpyHostToDevice));
 
 dim3 blockSize(256);
 dim3 gridSizeDist((lines + blockSize.x - 1) / blockSize.x);
@@ -413,6 +414,8 @@ do {
     // Step 3: Sum up the points assigned to each centroid
     updateCentroidsKernel<<<gridSizeDist, blockSize>>>(d_data, d_classMap, d_auxCentroids, d_pointsPerClass, lines, samples, K);
     CUDA_CHECK(cudaDeviceSynchronize());
+
+	//need to copy d_auxCentroids or d_pointsPerClass back to host??
 
     // Step 4: Compute new centroid positions
     finalizeCentroidsKernel<<<gridSizeCentroids, blockSize>>>(d_auxCentroids, d_pointsPerClass, d_centroids, K, samples);
